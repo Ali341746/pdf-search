@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"pdf-search/internal/extractor"
@@ -9,7 +8,7 @@ import (
 	"pdf-search/internal/storage"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/labstack/echo/v4"
 )
 
 type PDFHandler struct {
@@ -31,25 +30,25 @@ func NewPDFHandler(s *storage.Storage, idx *indexer.Indexer) *PDFHandler {
 // @Success 200 {string} string "ID of uploaded PDF"
 // @Failure 400 {string} string "Bad request"
 // @Router /upload [post]
-func (h *PDFHandler) UploadPDF(w http.ResponseWriter, r *http.Request) {
-	r.ParseMultipartForm(10 << 20) // 10MB
-
-	file, header, err := r.FormFile("file")
+func (h *PDFHandler) UploadPDF(c echo.Context) error {
+	file, err := c.FormFile("file")
 	if err != nil {
-		http.Error(w, "Failed to read file", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
-	if !strings.HasSuffix(strings.ToLower(header.Filename), ".pdf") {
-		http.Error(w, "Only PDFs allowed", http.StatusBadRequest)
-		return
+		return c.String(http.StatusBadRequest, "Failed to read file")
 	}
 
-	id, err := h.Store.SavePDF(file, header.Filename)
+	src, err := file.Open()
 	if err != nil {
-		http.Error(w, "Failed to save file", http.StatusInternalServerError)
-		return
+		return c.String(http.StatusBadRequest, "Failed to open file")
+	}
+	defer src.Close()
+
+	if !strings.HasSuffix(strings.ToLower(file.Filename), ".pdf") {
+		return c.String(http.StatusBadRequest, "Only PDFs allowed")
+	}
+
+	id, err := h.Store.SavePDF(src, file.Filename)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, "Failed to save file")
 	}
 
 	// Extract text immediately and index
@@ -64,7 +63,7 @@ func (h *PDFHandler) UploadPDF(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Write([]byte(id))
+	return c.String(http.StatusOK, id)
 }
 
 // GetPDF godoc
@@ -76,10 +75,10 @@ func (h *PDFHandler) UploadPDF(w http.ResponseWriter, r *http.Request) {
 // @Success 200
 // @Failure 404
 // @Router /pdf/{id} [get]
-func (h *PDFHandler) GetPDF(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+func (h *PDFHandler) GetPDF(c echo.Context) error {
+	id := c.Param("id")
 	path := h.Store.GetPDFPath(id)
-	http.ServeFile(w, r, path)
+	return c.File(path)
 }
 
 // ExtractPDFText godoc
@@ -89,18 +88,16 @@ func (h *PDFHandler) GetPDF(w http.ResponseWriter, r *http.Request) {
 // @Produce text/plain
 // @Success 200
 // @Router /extract/{id} [get]
-func (h *PDFHandler) ExtractPDFText(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+func (h *PDFHandler) ExtractPDFText(c echo.Context) error {
+	id := c.Param("id")
 	path := h.Store.GetPDFPath(id)
 
 	text, err := extractor.ExtractText(path)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return c.String(http.StatusInternalServerError, err.Error())
 	}
 
-	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(text))
+	return c.String(http.StatusOK, text)
 }
 
 // SearchPDF godoc
@@ -110,19 +107,16 @@ func (h *PDFHandler) ExtractPDFText(w http.ResponseWriter, r *http.Request) {
 // @Produce application/json
 // @Success 200 {array} string
 // @Router /search [get]
-func (h *PDFHandler) SearchPDF(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query().Get("q")
+func (h *PDFHandler) SearchPDF(c echo.Context) error {
+	query := c.QueryParam("q")
 	if query == "" {
-		http.Error(w, "Missing query parameter 'q'", http.StatusBadRequest)
-		return
+		return c.String(http.StatusBadRequest, "Missing query parameter 'q'")
 	}
 
 	results, err := h.Indexer.Search(query, 20) // top 20 results
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return c.String(http.StatusInternalServerError, err.Error())
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
+	return c.JSON(http.StatusOK, results)
 }

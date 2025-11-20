@@ -2,14 +2,13 @@ package main
 
 import (
 	"log"
-	"net/http"
 	"os"
 	"pdf-search/internal/handlers"
 	"pdf-search/internal/indexer"
 	"pdf-search/internal/storage"
 
-	"github.com/go-chi/chi/v5"
-	httpSwagger "github.com/swaggo/http-swagger"
+	"github.com/labstack/echo/v4"
+	echoSwagger "github.com/swaggo/echo-swagger"
 
 	_ "pdf-search/docs"
 )
@@ -22,20 +21,23 @@ func main() {
 	os.MkdirAll("./data/pdfs", 0755)
 
 	store := storage.NewStorage("./data/pdfs")
-	indexer, err := indexer.NewIndexer("./data/index.bleve")
+	idx, err := indexer.NewIndexer("./data/index.bleve")
 	if err != nil {
 		log.Fatal(err)
 	}
-	pdfHandler := handlers.NewPDFHandler(store, indexer)
+	pdfHandler := handlers.NewPDFHandler(store, idx)
 
-	r := chi.NewRouter()
+	e := echo.New()
 
-	r.Post("/upload", pdfHandler.UploadPDF)
-	r.Get("/pdf/{id}", pdfHandler.GetPDF)
-	r.Get("/extract/{id}", pdfHandler.ExtractPDFText)
-	r.Get("/search", pdfHandler.SearchPDF)
-	r.Get("/swagger/*", httpSwagger.WrapHandler)
+	// Routes – just pass echo.Context directly
+	e.POST("/upload", pdfHandler.UploadPDF)
+	e.GET("/pdf/:id", pdfHandler.GetPDF)
+	e.GET("/extract/:id", pdfHandler.ExtractPDFText)
+	e.GET("/search", pdfHandler.SearchPDF)
+
+	// Swagger UI
+	e.GET("/swagger/*", echoSwagger.WrapHandler)
 
 	log.Println("Server running on :8080")
-	http.ListenAndServe(":8080", r)
+	e.Logger.Fatal(e.Start(":8080"))
 }
